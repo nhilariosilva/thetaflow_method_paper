@@ -15,5 +15,6 @@ LICENSE
 
 **/venv/
 **/env/
-**/GDCdata
+**/GDCdata/
 *.rds
+*.csv
