@@ -1,7 +1,3 @@
-# script to run survival analysis using TCGA data
-# setwd("~/Desktop/demo/survivalAnalysis")
-
-
 library(TCGAbiolinks)
 library(survminer)
 library(survival)
@@ -34,6 +30,8 @@ clinical_brca$overall_survival <- ifelse(clinical_brca$vital_status == "Alive",
 # get gene expression data -----------
 
 # build a query to get gene expression data for entire cohort
+# Transcriptome Profiling + Gene Expression Quantification:
+# High dimensional gene count data
 query_brca_all = GDCquery(
   project = "TCGA-BRCA",
   data.category = "Transcriptome Profiling", # parameter enforced by GDCquery
@@ -44,81 +42,112 @@ query_brca_all = GDCquery(
   access = "open")
 
 output_brca <- getResults(query_brca_all)
-# get 20 primary tissue sample barcodes
-tumor <- output_brca$cases[1:20]
-# OR
-tumor <- output_brca[output_brca$sample_type == "Primary Tumor", "cases"][1:20]
-tumor
+output_brca
 
-# # get gene expression data from 20 primary tumors 
-query_brca_all <- GDCquery(
-  project = "TCGA-BRCA",
-  data.category = "Transcriptome Profiling", # parameter enforced by GDCquery
-  experimental.strategy = "RNA-Seq",
-  workflow.type = "STAR - Counts",
-  data.type = "Gene Expression Quantification",
-  sample.type = c("Primary Tumor", "Solid Tissue Normal"),
-  access = "open",
-  barcode = tumor)
-
-# download data
-GDCdownload(query_brca_all)
+# Download all the counting files queried above
+# GDCdownload(query_brca_all)
 
 # get counts
-tcga_brca_data <- GDCprepare(query_brca, summarizedExperiment = TRUE)
+tcga_brca_data <- GDCprepare(query_brca_all, summarizedExperiment = TRUE)
+# Saves the exact state of the object to your working directory
+# NOT NEEDED! Data can be extracted directly from the GDCprepare function
+# saveRDS(tcga_brca_data, file = "tcga_brca_raw_counts.rds")
+
+# If p: number of genes and n: number of patients, this matrix is p \times n
+# For each cell of this table, counts how many times that specific gene appeared
+# in the patient's primary tumor genome sequencing
 brca_matrix <- assay(tcga_brca_data, "unstranded")
 brca_matrix[1:10,1:10]
 
-
 # extract gene and sample metadata from summarizedExperiment object
+# Gene (features) information. p \times m dataset
 gene_metadata <- as.data.frame(rowData(tcga_brca_data))
+
+# Patients information. n \times k dataset
+# Each row corresponds to a patient (column) in brca_matrix
+# Contains all the survival times, event indicators, gender, tumor stage, barcode IDs
 coldata <- as.data.frame(colData(tcga_brca_data))
 
+# The power of this structure: If I remove a patient from colData,
+# the SummarizedObject automatically deletes their corresponding column in the
+# assay matrix or if you filter junk genes from rowData, it deletes their
+# corresponding rows from the matrix
+# As an example, let's consider taking only the male patients data from tcga_brca_data
+# which are very few, since we are treating breast cancer cases.
+# Also, to showcase we can filter out genes too, we consider only those with source = "HAVANA"
+dim(tcga_brca_data)
+keep_havana_genes <- which(rowData(tcga_brca_data)$source == "HAVANA")
+keep_male_patients <- which( tcga_brca_data$gender == "male" )
+# tcga_brca_data$... supports directly the colData columns
+# keep_female_patients2 <- which( colData(tcga_brca_data)$gender == "female" )
+tcga_brca_data_filtered <- tcga_brca_data[ keep_havana_genes , keep_male_patients ]
+as.data.frame(colData(tcga_brca_data_filtered))$gender
+as.data.frame(rowData(tcga_brca_data_filtered))$source
+View( as.data.frame(colData(tcga_brca_data_filtered)) )
+
+tcga_brca_data_study <- tcga_brca_data
+# Event indicator (delta): inside colData - 1 = Dead, 0 = Censored
+colData(tcga_brca_data_study)$delta <- ifelse(tcga_brca_data_study$vital_status == "Dead", 1, 0)
+# Survival time (time): inside colData
+colData(tcga_brca_data_study)$time <- ifelse(
+  tcga_brca_data_study$vital_status == "Alive",
+  tcga_brca_data_study$days_to_last_follow_up,
+  tcga_brca_data_study$days_to_death
+)
+# Filter oout patients who do not have time and censorship information
+keep_valid_patients <- which(!is.na(tcga_brca_data_study$time) &
+                             !is.na(tcga_brca_data_study$delta) &
+                             (tcga_brca_data_study$gender == "female"))
+tcga_brca_data_study <- tcga_brca_data_study[ , keep_valid_patients ]
+# Total of 1095 valid patients
+dim(tcga_brca_data_study)
+
+View(as.data.frame(colData(tcga_brca_data_study))[,c("delta", "time")])
+
+
+gene_metadata <- as.data.frame(rowData(tcga_brca_data_study))
+coldata <- as.data.frame(colData(tcga_brca_data_study))
+brca_matrix <- assay(tcga_brca_data_study, "unstranded")
+brca_matrix[1:10,1:10]
 
 # vst transform counts to be used in survival analysis ---------------
-# Setting up countData object   
+
+# Setting up countData object
+# design is the formula used to tell the object how will we build the design
+# matrix for its internal for its internal Negative Binomial GLMs
 dds <- DESeqDataSetFromMatrix(countData = brca_matrix,
                               colData = coldata,
                               design = ~ 1)
 
-# Removing genes with sum total of 10 reads across all samples
-keep <- rowSums(counts(dds)) >= 10
-dds <- dds[keep,]
+# A gene is only biologically relevant to the population if it is meaningfully
+# expressed in a reasonable fraction of that population.
+# We take out genes that are expressed in less than 5% of the patients overall genes
 
+# Minimal number of patients that can express a gene for it to be considered
+min_patients <- round(0.05 * ncol(dds))
+min_patients
 
-# vst 
-vsd <- vst(dds, blind=FALSE)
+# We keep only the genes that appear more than 10 times in at least 5% of all
+# the patients. The number 10 is called the Limit of Quantification (LOQ)
+keep_genes <- rowSums(counts(dds) >= 10) >= min_patients
+# The amount of genes considered is drastically reduced with this filter
+# We are able to remove most completely unrelated genes from the analysis before
+# passing those to a machine learning driven model
+sum(keep_genes)
+
+dds <- dds[keep_genes,]
+dim(dds)
+
+# Perform a Variance Stabilizing Transformation, which standardize count data
+# variances according to a Negative Binomial model
+vsd <- vst(dds, blind = FALSE)
 brca_matrix_vst <- assay(vsd)
 brca_matrix_vst[1:10,1:10]
+dim(brca_matrix_vst)
 
+X_transposed <- t(brca_matrix_vst)
+time <- vsd$time
+delta <- vsd$delta
 
-# Get data for TP53 gene and add gene metadata information to it -------------
-brca_tp53 <- brca_matrix_vst %>% 
-  as.data.frame() %>% 
-  rownames_to_column(var = 'gene_id') %>% 
-  gather(key = 'case_id', value = 'counts', -gene_id) %>% 
-  left_join(., gene_metadata, by = "gene_id") %>% 
-  filter(gene_name == "TP53")
-
-
-# get median value
-median_value <- median(brca_tp53$counts)
-
-# denote which cases have higher or lower expression than median count
-brca_tp53$strata <- ifelse(brca_tp53$counts >= median_value, "HIGH", "LOW")
-
-# Add clinical information to brca_tp53
-brca_tp53$case_id <- gsub('-01.*', '', brca_tp53$case_id)
-brca_tp53 <- merge(brca_tp53, clinical_brca, by.x = 'case_id', by.y = 'submitter_id')
-
-
-# fitting survival curve -----------
-fit <- survfit(Surv(overall_survival, deceased) ~ strata, data = brca_tp53)
-fit
-ggsurvplot(fit,
-           data = brca_tp53,
-           pval = T,
-           risk.table = T)
-
-
-fit2 <- survdiff(Surv(overall_survival, deceased) ~ strata, data = brca_tp53)
+final_dataset <- data.frame(time = time, delta = delta, X_transposed)
+write.csv(final_dataset, file = "tcga_brca_count_data.csv", row.names = FALSE)
