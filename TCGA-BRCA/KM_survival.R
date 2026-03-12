@@ -85,25 +85,34 @@ as.data.frame(colData(tcga_brca_data_filtered))$gender
 as.data.frame(rowData(tcga_brca_data_filtered))$source
 View( as.data.frame(colData(tcga_brca_data_filtered)) )
 
-tcga_brca_data_study <- tcga_brca_data
+
 # Event indicator (delta): inside colData - 1 = Dead, 0 = Censored
-colData(tcga_brca_data_study)$delta <- ifelse(tcga_brca_data_study$vital_status == "Dead", 1, 0)
+colData(tcga_brca_data)$delta <- ifelse(tcga_brca_data$vital_status == "Dead", 1, 0)
 # Survival time (time): inside colData
-colData(tcga_brca_data_study)$time <- ifelse(
-  tcga_brca_data_study$vital_status == "Alive",
-  tcga_brca_data_study$days_to_last_follow_up,
-  tcga_brca_data_study$days_to_death
+colData(tcga_brca_data)$time <- ifelse(
+  tcga_brca_data$vital_status == "Alive",
+  tcga_brca_data$days_to_last_follow_up,
+  tcga_brca_data$days_to_death
 )
+# Patients whose lifetime is equal to zero may have died on the first day since
+# they were diagnosed. To avoid problems, replace zeros by 1
+colData(tcga_brca_data)$time <- ifelse(
+  tcga_brca_data$time == 0,
+  1,
+  tcga_brca_data$time
+)
+
+tcga_brca_data_study <- tcga_brca_data
 # Filter oout patients who do not have time and censorship information
-keep_valid_patients <- which(!is.na(tcga_brca_data_study$time) &
-                             !is.na(tcga_brca_data_study$delta) &
-                             (tcga_brca_data_study$gender == "female"))
-tcga_brca_data_study <- tcga_brca_data_study[ , keep_valid_patients ]
-# Total of 1095 valid patients
+keep_valid_patients <- which(!is.na(tcga_brca_data$time) &
+                             !is.na(tcga_brca_data$delta) &
+                             (tcga_brca_data$gender == "female") &
+                             (tcga_brca_data$time > 0))
+tcga_brca_data_study <- tcga_brca_data[ , keep_valid_patients ]
+# Total of 1074 valid patients
 dim(tcga_brca_data_study)
 
 View(as.data.frame(colData(tcga_brca_data_study))[,c("delta", "time")])
-
 
 gene_metadata <- as.data.frame(rowData(tcga_brca_data_study))
 coldata <- as.data.frame(colData(tcga_brca_data_study))
