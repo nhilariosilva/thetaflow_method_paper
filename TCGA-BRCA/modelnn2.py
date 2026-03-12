@@ -708,6 +708,14 @@ class ModelNN(keras.models.Model):
                         loss_value = self.loglikelihood_loss_pretrain(nn_output = nn_output_batch, data = batch_full_data)
                     else:
                         loss_value = self.loglikelihood_loss(self, nn_output = nn_output_batch, data = batch_full_data)
+
+                    # Automatic regularization from layer definitions
+                    # Check if any layer in the model generated a regularization loss
+                    if(self.losses):
+                        # sums all tensors in the self.losses list
+                        regularization_penalty = tf.math.add_n(self.losses)
+                        # Add it to the base log-likelihood
+                        loss_value = loss_value + regularization_penalty
                 
                 gradients = tape.gradient(loss_value, self.trainable_variables)
 
