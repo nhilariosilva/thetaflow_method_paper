@@ -712,13 +712,20 @@ class ModelNN(keras.models.Model):
                 gradients = tape.gradient(loss_value, self.trainable_variables)
 
                 # Gradient trap: Check if any gradient in the entire network became NaN or Inf
-                # has_nan_grad = tf.reduce_any([tf.reduce_any(tf.math.is_nan(g)) for g in gradients if g is not None])
-                # has_inf_grad = tf.reduce_any([tf.reduce_any(tf.math.is_inf(g)) for g in gradients if g is not None])
+                has_nan_grad = tf.reduce_any([tf.reduce_any(tf.math.is_nan(g)) for g in gradients if g is not None])
+                has_inf_grad = tf.reduce_any([tf.reduce_any(tf.math.is_inf(g)) for g in gradients if g is not None])
         
-                # if tf.math.logical_or(has_nan_grad, has_inf_grad):
-                #     tf.print("\n[!] FATAL: Gradients exploded to NaN/Inf at Epoch:", epoch)
-                #     stop_training = True
-                #     break # Halt before the optimizer poisons the weights
+                if tf.math.logical_or(has_nan_grad, has_inf_grad):
+                    tf.print("\n[!] FATAL: Gradients exploded to NaN/Inf at Epoch:", epoch)
+
+                    lam_batch = self.get_variable("lam", nn_output_batch)
+                    rho_batch = self.get_variable("rho", nn_output_batch)
+                    
+                    tf.print("-> LAST SAFE lam (min | max):", tf.reduce_min(lam_batch), "|", tf.reduce_max(lam_batch))
+                    tf.print("-> LAST SAFE rho (min | max):", tf.reduce_min(rho_batch), "|", tf.reduce_max(rho_batch))
+                    
+                    stop_training = True
+                    break # Halt before the optimizer poisons the weights
                 
                 # To avoid crash problems in that case, we simply replace None with a zero like gradient, so those weights do not get updated
                 # It is the user's responsibility to build a loss that depends on all the trainable parameters, but we allow that to happen in this case
