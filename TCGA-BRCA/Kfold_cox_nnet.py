@@ -124,7 +124,7 @@ def train_eval_cox_nnet(X_train, data_train, cox_nnet_parameters,
                         early_stopping = True, early_stopping_tolerance = 1.0e-4, early_stopping_warmup = 1000,
                         reduce_lr = True, reduce_lr_warmup = 10,
                         reduce_lr_factor = 0.9, reduce_lr_min_delta = 1.0e-4, reduce_lr_patience = 5,
-                        reduce_lr_cooldown = 20, reduce_lr_min_lr = 1e-5,
+                        reduce_lr_cooldown = 10, reduce_lr_min_lr = 1e-5,
                         deterministic = True,
                         verbose = 1, print_freq = 100):
     """
@@ -169,7 +169,7 @@ def main():
     dropout_rate = params.get('dropout_rate', 0.1)
     ridge_penalty = params.get('ridge_penalty', 1e-2)
     
-    kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+    kf = KFold(n_splits = n_splits, shuffle = True, random_state = 42)
     fold_c_indices = []
     
     # 2. Run the K-Fold Cross Validation
@@ -179,18 +179,18 @@ def main():
         y_train, y_val = y[train_idx], y[val_idx]
         delta_train, delta_val = delta[train_idx], delta[val_idx]
         
-        X_train = tf.cast(X_train, dtype=tf.float32)
-        X_val = tf.cast(X_val, dtype=tf.float32)
+        X_train = tf.cast(X_train, dtype = tf.float32)
+        X_val = tf.cast(X_val, dtype = tf.float32)
         
         data_train = [
-            tf.constant(y_train, shape = (len(y_train), 1), dtype=tf.float32), 
-            tf.constant(delta_train, shape = (len(delta_train), 1), dtype=tf.float32)
+            tf.constant(y_train, shape = (len(y_train), 1), dtype = tf.float32), 
+            tf.constant(delta_train, shape = (len(delta_train), 1), dtype = tf.float32)
         ]
         
         # Rebuild Architecture
         cox_nnet_params, pll_loss, nn_arch, nn_call, nn_call_nolast = build_cox_nnet(
-            dropout_rate=dropout_rate, 
-            ridge_penalty=ridge_penalty
+            dropout_rate = dropout_rate, 
+            ridge_penalty = ridge_penalty
         )
         
         # Optimizer must be created fresh for each fold
@@ -214,9 +214,9 @@ def main():
         # Evaluate C-Index
         theta_val = model.predict(X_val)["theta"].numpy().flatten()
         fold_c_index = concordance_index(
-            event_times=y_val.flatten(),
-            predicted_scores=-theta_val,
-            event_observed=delta_val.flatten()
+            event_times = y_val.flatten(),
+            predicted_scores = -theta_val,
+            event_observed = delta_val.flatten()
         )
         
         fold_c_indices.append(fold_c_index)
